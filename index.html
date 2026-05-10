@@ -1822,7 +1822,7 @@ function openTikTok() {
 
 <script>
   const supabaseUrl = 'https://sutbdrspbrhpigdzngwp.supabase.co';
-  const supabaseKey = 'sb_publishable_gbH_w8iAlDPGDcffN1t0zg_xLQ_KrH7';
+  const supabaseKey = 'sb_publishable_czO-XsxUovv57RkltHCQbA_HjrMoGjq';
   const _supabase = supabase.createClient(supabaseUrl, supabaseKey);
 
   // تحميل البيانات من Supabase عند بدء الصفحة
@@ -1939,18 +1939,18 @@ function openTikTok() {
     try {
       if (!localStorage.getItem(visitorKey)) {
         // زائر جديد - زيادة العدد
-        const res = await fetch(`https://api.countapi.xyz/hit/${namespace}/${key}`);
+        const res = await fetch(`https://.count.xyz/hit/${namespace}/${key}`);
         const data = await res.json();
         updateVisitorDisplay(data.value);
         localStorage.setItem(visitorKey, 'true');
       } else {
         // زائر موجود - جلب العدد فقط
-        const res = await fetch(`https://api.countapi.xyz/get/${namespace}/${key}`);
+        const res = await fetch(`https://.count.xyz/get/${namespace}/${key}`);
         const data = await res.json();
         updateVisitorDisplay(data.value || 0);
       }
     } catch (err) {
-      console.error('CountAPI error:', err);
+      console.error('Count error:', err);
       updateVisitorDisplay('--');
     }
   }
