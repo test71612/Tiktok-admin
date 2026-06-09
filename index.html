@@ -1208,7 +1208,8 @@
 const DEFAULT_MASTER_PASSWORD = '112233qqwwee';
 const MAX_BROADCASTS = 5;
 const EXCLUDE_THRESHOLD = 3;
-const DEFAULT_NAMES = ['المشرف الأول','المشرف الثاني','المشرف الثالث','المشرف الرابع','المشرف الخامس'];
+const SEAT_COUNT = 15;
+const DEFAULT_NAMES = ['المشرف الأول','المشرف الثاني','المشرف الثالث','المشرف الرابع','المشرف الخامس','المشرف السادس','المشرف السابع','المشرف الثامن','المشرف التاسع','المشرف العاشر','المشرف الحادي عشر','المشرف الثاني عشر','المشرف الثالث عشر','المشرف الرابع عشر','المشرف الخامس عشر'];
 
 // ---- ADMIN USERS & MASTER PASSWORD (stored in state -> Supabase) ----
 function loadAdminUsers() {
@@ -1293,8 +1294,8 @@ let isMasterEdit = false; // true = دخل بالماستر باسورد
 function createFreshState(names) {
   return {
     cycleNumber: 1,
-    names: names.slice(0,5),
-    attendance: Array(5).fill(null).map(() => Array(MAX_BROADCASTS).fill(null)),
+    names: names.slice(0,SEAT_COUNT),
+    attendance: Array(SEAT_COUNT).fill(null).map(() => Array(MAX_BROADCASTS).fill(null)),
     currentBroadcast: 0,
     cycleFinished: false,
     history: []
@@ -1317,6 +1318,28 @@ async function saveState() {
 
 function getHistory() {
   return state.history || [];
+}
+
+// يضمن أن الحالة المحمّلة تحتوي على العدد الصحيح من المقاعد (للترقية من 5 إلى 15)
+function normalizeState(s) {
+  if (!s) return s;
+  if (!Array.isArray(s.names)) s.names = [];
+  if (!Array.isArray(s.attendance)) s.attendance = [];
+  for (let i = 0; i < SEAT_COUNT; i++) {
+    if (typeof s.names[i] !== 'string' || !s.names[i]) {
+      s.names[i] = DEFAULT_NAMES[i] || ('المشرف ' + (i + 1));
+    }
+    if (!Array.isArray(s.attendance[i])) {
+      s.attendance[i] = Array(MAX_BROADCASTS).fill(null);
+    } else {
+      while (s.attendance[i].length < MAX_BROADCASTS) s.attendance[i].push(null);
+    }
+  }
+  // قصّ أي مقاعد زائدة عن العدد المحدد
+  s.names = s.names.slice(0, SEAT_COUNT);
+  s.attendance = s.attendance.slice(0, SEAT_COUNT);
+  if (!s.history) s.history = [];
+  return s;
 }
 
 // ---- RENDER ----
@@ -1671,7 +1694,7 @@ function startNewCycle() {
     }))
   };
   state.history.push(cycleData);
-  state.attendance = Array(5).fill(null).map(() => Array(MAX_BROADCASTS).fill(null));
+  state.attendance = Array(SEAT_COUNT).fill(null).map(() => Array(MAX_BROADCASTS).fill(null));
   state.currentBroadcast = 0;
   state.cycleFinished = false;
   editMode = false;
@@ -1836,7 +1859,7 @@ function openTikTok() {
     if (error) {
       console.warn('لا توجد بيانات في قاعدة البيانات، يُستخدم الوضع الافتراضي:', error.message);
     } else if (data && data.data) {
-      state = data.data;
+      state = normalizeState(data.data);
       // تأكد من وجود history في الحالة
       if (!state.history) state.history = [];
     }
@@ -1856,7 +1879,7 @@ function openTikTok() {
         (payload) => {
           // لا تطبّق التحديث إذا كان المستخدم في وضع التعديل (لتجنب التعارض)
           if (!editMode) {
-            state = payload.new.data;
+            state = normalizeState(payload.new.data);
             if (!state.history) state.history = [];
             render();
             if (typeof renderHistory === 'function') renderHistory();
@@ -1877,7 +1900,7 @@ function openTikTok() {
 
   // ---- VISITOR COUNTER ----
   async function initVisitorCounter() {
-    const visitorKey = 'xdreemb_visitor_id';
+    const visitorKey = '********';
     let visitorId = localStorage.getItem(visitorKey);
     
     // إنشاء معرف فريد للزائر إذا لم يكن موجود
@@ -1934,7 +1957,7 @@ function openTikTok() {
   async function fallbackVisitorCounter() {
     const namespace = 'xdreemb52-attendance';
     const key = 'visitors';
-    const visitorKey = 'xdreemb_counted';
+    const visitorKey = '********';
     
     try {
       if (!localStorage.getItem(visitorKey)) {
