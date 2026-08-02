@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: xdreemb52-attendance
+    runtime: node
+    region: frankfurt          # أقرب منطقة للسعودية
+    plan: starter              # لا ينام (النسخة المجانية تنام)
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    autoDeployTrigger: commit  # نشر تلقائي مع كل push
+    envVars:
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: MASTER_PASSWORD
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_SERVICE_KEY
+        sync: false
