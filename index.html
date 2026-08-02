@@ -422,6 +422,28 @@
     color: var(--primary);
   }
   .user-badge.show { display: inline-flex; }
+  .profiles-report { max-height: 46vh; overflow-y: auto; display: flex; flex-direction: column; gap: 7px; }
+  .pr-row {
+    display: flex; align-items: center; gap: 10px; text-align: right;
+    background: var(--bg3); border: 1px solid var(--border);
+    border-right-width: 3px; border-radius: 10px; padding: 9px 12px;
+  }
+  .pr-badge {
+    width: 22px; height: 22px; flex-shrink: 0; border-radius: 6px;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 0.8rem; font-weight: 900; background: rgba(255,255,255,0.06);
+  }
+  .pr-body { flex: 1; min-width: 0; }
+  .pr-head { display: flex; align-items: baseline; gap: 8px; }
+  .pr-handle { font-weight: 800; font-size: 0.85rem; direction: ltr; }
+  .pr-rows { font-size: 0.66rem; color: var(--text-muted); }
+  .pr-note { font-size: 0.72rem; color: var(--text-muted); margin-top: 2px; overflow-wrap: anywhere; }
+  .pr-status { font-size: 0.68rem; font-weight: 800; flex-shrink: 0; }
+  .pr-ok      { border-right-color: var(--success); } .pr-ok .pr-status,      .pr-ok .pr-badge      { color: var(--success); }
+  .pr-updated { border-right-color: var(--primary); } .pr-updated .pr-status, .pr-updated .pr-badge { color: var(--primary); }
+  .pr-warn    { border-right-color: #fbbf24; }        .pr-warn .pr-status,    .pr-warn .pr-badge    { color: #fbbf24; }
+  .pr-bad     { border-right-color: var(--danger); }  .pr-bad .pr-status,     .pr-bad .pr-badge     { color: var(--danger); }
+
   @keyframes ttPulse {
     0%   { box-shadow: 0 0 0 0 rgba(245,158,11,0.55); }
     100% { box-shadow: 0 0 0 10px rgba(245,158,11,0); }
@@ -608,6 +630,18 @@
     </div>
     <div class="sup-divider"></div>
     <div class="modal-actions" style="justify-content:center;"><button class="btn btn-ghost" onclick="closeModal('modal-supervision')">إغلاق</button></div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="modal-profiles">
+  <div class="modal">
+    <h3>فحص حسابات تيك توك</h3>
+    <p id="profiles-summary" style="margin-bottom:0.9rem;"></p>
+    <div class="profiles-report" id="profiles-report"></div>
+    <div class="modal-actions" style="margin-top:1rem;">
+      <button class="btn btn-ghost" onclick="closeModal('modal-profiles')">إغلاق</button>
+      <button class="btn btn-primary" onclick="closeModal('modal-profiles');refreshAllProfiles()">إعادة الفحص</button>
+    </div>
   </div>
 </div>
 
@@ -1286,8 +1320,9 @@ function saveCacheLocal() {
   try { localStorage.setItem('tt_cache_v3', JSON.stringify(ttCache)); } catch(e){}
 }
 
-async function imgUrlToBase64(url) {
-  const proxies = [
+async function imgUrlToBase64(url, { direct = false } = {}) {
+  // direct = لا تستخدم بروكسي الصور (مفيد لخدمات ترجع 404/429، فالبروكسي يضاعف الضجيج)
+  const proxies = direct ? [url] : [
     'https://images.weserv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//,'')),
     'https://wsrv.nl/?url='          + encodeURIComponent(url.replace(/^https?:\/\//,'')),
     url
@@ -1347,10 +1382,16 @@ const PROXIES = [
 const TT_TTL_MS = 30 * 60 * 1000;   // نصف ساعة
 const ttInFlight = new Set();
 
+/* عند فشل الجلب ننتظر مدة متزايدة قبل إعادة المحاولة،
+   حتى لا نغرق الكونسول ولا نستهلك حد الطلبات في unavatar */
+const TT_BACKOFF = [2 * 60e3, 10 * 60e3, 60 * 60e3, 12 * 3600e3];
+
 function ttIsStale(entry) {
   if (!entry) return true;
-  if (!entry.b64) return true;
-  return (Date.now() - (entry.ts || 0)) > TT_TTL_MS;
+  const age = Date.now() - (entry.ts || 0);
+  if (entry.b64) return age > TT_TTL_MS;                 // عنده صورة: فحص عادي
+  const fails = entry.fails || 0;                        // بدون صورة: تراجع تصاعدي
+  return age > TT_BACKOFF[Math.min(fails, TT_BACKOFF.length - 1)];
 }
 
 async function fetchTikTokProfile(handle, force = false) {
@@ -1397,7 +1438,7 @@ async function _fetchTikTokProfile(h) {
 
   let b64 = avatarUrl ? await imgUrlToBase64(avatarUrl) : null;
   if (!b64) {
-    b64 = await imgUrlToBase64('https://unavatar.io/tiktok/' + encodeURIComponent(h) + '?fallback=false');
+    b64 = await imgUrlToBase64('https://unavatar.io/tiktok/' + encodeURIComponent(h), { direct: true });
   }
 
   const prev = ttCache[h];
@@ -1408,6 +1449,7 @@ async function _fetchTikTokProfile(h) {
     b64: b64 || (prev && prev.b64) || null,
     ts: Date.now()
   };
+  profile.fails = profile.b64 ? 0 : (prev && prev.fails || 0) + 1;
   profile.changed = !!prev && ((prev.display || '') !== profile.display || (prev.b64 || '') !== (profile.b64 || ''));
   ttCache[h] = profile;
   saveCacheLocal();
@@ -1422,23 +1464,110 @@ function startTikTokWatcher() {
   setInterval(async () => {
     if (document.hidden || !ttWatched.size) return;
     for (const handle of ttWatched) {
+      if (!ttIsStale(ttCache[handle])) continue;
       const p = await fetchTikTokProfile(handle);
       if (p && p.changed) { render(); break; }
     }
   }, TT_TTL_MS);
 }
 
-/* زر يدوي: يجبر إعادة الفحص فوراً */
+/* الحسابات الظاهرة فعلياً في الجدول الآن — مصدرها أسماء الصفوف، لا الكاش */
+function visibleHandles() {
+  const seen = new Map();
+  (state.names || []).forEach((raw, i) => {
+    if (!looksLikeHandle(raw)) return;
+    const handle = cleanHandle(raw);
+    if (!handle) return;
+    const key = handle.toLowerCase();
+    if (seen.has(key)) { seen.get(key).rows.push(i + 1); return; }
+    seen.set(key, { handle, raw, rows: [i + 1] });
+  });
+  return [...seen.values()];
+}
+
+/* زر "تحديث الحسابات": يفحص كل حساب ظاهر ويتحقق أن بياناته تخصّه هو */
+let profilesBusy = false;
+
 async function refreshAllProfiles() {
-  if (!ttWatched.size) { showToast('لا توجد حسابات تيك توك في الجدول'); return; }
-  showToast('جارٍ فحص حسابات تيك توك…');
-  let changes = 0;
-  for (const handle of ttWatched) {
-    const p = await fetchTikTokProfile(handle, true);
-    if (p && p.changed) changes++;
+  if (profilesBusy) return;
+  const targets = visibleHandles();
+  if (!targets.length) { showToast('لا توجد حسابات تيك توك في الجدول'); return; }
+
+  profilesBusy = true;
+  const btn = document.getElementById('refresh-profiles-btn');
+  if (btn) { btn.disabled = true; btn.style.opacity = '0.6'; }
+
+  const results = [];
+  for (let i = 0; i < targets.length; i++) {
+    const t = targets[i];
+    showToast(`فحص ${i + 1} من ${targets.length} — @${t.handle}`);
+
+    const before = ttCache[t.handle];
+    if (before) before.fails = 0;                     // الفحص اليدوي يتجاوز التراجع
+    const p = await fetchTikTokProfile(t.handle, true);
+
+    let status, note;
+    if (!p) {
+      status = 'fail'; note = 'تعذّر الوصول للحساب';
+    } else if (p.handle.toLowerCase() !== t.handle.toLowerCase()) {
+      // حماية: لا نقبل بيانات رجعت لمعرّف مختلف عن المطلوب
+      status = 'mismatch'; note = 'البيانات رجعت لحساب آخر (@' + p.handle + ') — أُهملت';
+      delete ttCache[t.handle]; saveCacheLocal();
+    } else if (!p.b64 && (!p.display || p.display.toLowerCase() === t.handle.toLowerCase())) {
+      status = 'missing'; note = 'ما لقينا صورة ولا اسم — تأكد أن المعرّف مكتوب صح أو أن الحساب عام';
+    } else if (p.changed) {
+      const bits = [];
+      if ((before?.display || '') !== p.display) bits.push('الاسم: ' + (before?.display || '—') + ' ← ' + p.display);
+      if ((before?.b64 || '') !== (p.b64 || ''))  bits.push('الصورة تغيّرت');
+      status = 'updated'; note = bits.join(' • ');
+    } else {
+      status = 'ok'; note = 'مطابق — ' + (p.display || t.handle);
+    }
+    results.push({ ...t, status, note, display: p?.display || null });
   }
+
+  // تنظيف الكاش من حسابات ما عادت في الجدول
+  const live = new Set(targets.map(t => t.handle.toLowerCase()));
+  for (const k of Object.keys(ttCache)) if (!live.has(k.toLowerCase())) delete ttCache[k];
+  saveCacheLocal();
+  ttWatched.clear(); targets.forEach(t => ttWatched.add(t.handle));
+
   render();
-  showToast(changes ? `تم تحديث ${changes} حساب` : 'كل البيانات محدَّثة');
+  profilesBusy = false;
+  if (btn) { btn.disabled = false; btn.style.opacity = ''; }
+  showProfilesReport(results);
+}
+
+const PROFILE_STATUS = {
+  updated:  { icon: '🔄', label: 'تم التحديث', cls: 'pr-updated' },
+  ok:       { icon: '✓',  label: 'مطابق',      cls: 'pr-ok' },
+  missing:  { icon: '?',  label: 'غير مؤكَّد',  cls: 'pr-warn' },
+  mismatch: { icon: '!',  label: 'غير مطابق',  cls: 'pr-bad' },
+  fail:     { icon: '×',  label: 'فشل الفحص',  cls: 'pr-bad' }
+};
+
+function showProfilesReport(results) {
+  const counts = results.reduce((a, r) => (a[r.status] = (a[r.status] || 0) + 1, a), {});
+  const summary = [
+    counts.updated  ? `${counts.updated} محدَّث`   : null,
+    counts.ok       ? `${counts.ok} مطابق`         : null,
+    counts.missing  ? `${counts.missing} غير مؤكَّد` : null,
+    (counts.mismatch || counts.fail) ? `${(counts.mismatch || 0) + (counts.fail || 0)} فيه مشكلة` : null
+  ].filter(Boolean).join(' • ');
+
+  document.getElementById('profiles-summary').textContent = summary || 'لا توجد نتائج';
+  document.getElementById('profiles-report').innerHTML = results.map(r => {
+    const s = PROFILE_STATUS[r.status];
+    return `<div class="pr-row ${s.cls}">
+      <span class="pr-badge">${s.icon}</span>
+      <div class="pr-body">
+        <div class="pr-head"><span class="pr-handle">@${escapeHtml(r.handle)}</span><span class="pr-rows">صف ${r.rows.join('، ')}</span></div>
+        <div class="pr-note">${escapeHtml(r.note)}</div>
+      </div>
+      <span class="pr-status">${s.label}</span>
+    </div>`;
+  }).join('');
+  openModal('modal-profiles');
 }
 
 function buildTikTokProfile(rawName) {
@@ -1627,10 +1756,37 @@ async function initVisitorCounter() {
     visitorId = 'v_' + Date.now() + '_' + Math.random().toString(36).slice(2, 11);
     localStorage.setItem(visitorKey, visitorId);
   }
+
+  // المسار الأساسي: عبر الخادم
   try {
     const r = await api('visit', { method: 'POST', body: { visitorId } });
-    updateVisitorDisplay(r.count);
-  } catch (err) { updateVisitorDisplay('--'); }
+    if (typeof r?.count === 'number') { updateVisitorDisplay(r.count); return; }
+  } catch (e) {
+    console.warn('عدّاد الزوار عبر الخادم غير متاح، سيُستخدم الاتصال المباشر:', e.message);
+  }
+
+  // احتياطي: الاتصال المباشر بـ Supabase (يشتغل قبل نشر الخادم)
+  await visitorCounterDirect(visitorId);
+}
+
+async function visitorCounterDirect(visitorId) {
+  try {
+    const { data: row } = await _supabase.from('visitors').select('count,visitor_ids').eq('id', 1).single();
+    const current = row?.count || 0;
+    const ids     = row?.visitor_ids || [];
+
+    if (!row) {
+      await _supabase.from('visitors').insert({ id: 1, count: 1, visitor_ids: [visitorId] });
+      updateVisitorDisplay(1); return;
+    }
+    if (ids.includes(visitorId)) { updateVisitorDisplay(current); return; }
+
+    const next = current + 1;
+    const { error } = await _supabase.from('visitors').upsert({ id: 1, count: next, visitor_ids: [...ids, visitorId] });
+    updateVisitorDisplay(error ? current : next);   // الكتابة ممنوعة بعد تفعيل RLS — نعرض الرقم الحالي
+  } catch (err) {
+    updateVisitorDisplay('--');
+  }
 }
 
 function updateVisitorDisplay(count) {
