@@ -1286,8 +1286,9 @@ function saveCacheLocal() {
   try { localStorage.setItem('tt_cache_v3', JSON.stringify(ttCache)); } catch(e){}
 }
 
-async function imgUrlToBase64(url) {
-  const proxies = [
+async function imgUrlToBase64(url, { direct = false } = {}) {
+  // direct = لا تستخدم بروكسي الصور (مفيد لخدمات ترجع 404/429، فالبروكسي يضاعف الضجيج)
+  const proxies = direct ? [url] : [
     'https://images.weserv.nl/?url=' + encodeURIComponent(url.replace(/^https?:\/\//,'')),
     'https://wsrv.nl/?url='          + encodeURIComponent(url.replace(/^https?:\/\//,'')),
     url
@@ -1347,10 +1348,16 @@ const PROXIES = [
 const TT_TTL_MS = 30 * 60 * 1000;   // نصف ساعة
 const ttInFlight = new Set();
 
+/* عند فشل الجلب ننتظر مدة متزايدة قبل إعادة المحاولة،
+   حتى لا نغرق الكونسول ولا نستهلك حد الطلبات في unavatar */
+const TT_BACKOFF = [2 * 60e3, 10 * 60e3, 60 * 60e3, 12 * 3600e3];
+
 function ttIsStale(entry) {
   if (!entry) return true;
-  if (!entry.b64) return true;
-  return (Date.now() - (entry.ts || 0)) > TT_TTL_MS;
+  const age = Date.now() - (entry.ts || 0);
+  if (entry.b64) return age > TT_TTL_MS;                 // عنده صورة: فحص عادي
+  const fails = entry.fails || 0;                        // بدون صورة: تراجع تصاعدي
+  return age > TT_BACKOFF[Math.min(fails, TT_BACKOFF.length - 1)];
 }
 
 async function fetchTikTokProfile(handle, force = false) {
@@ -1397,7 +1404,7 @@ async function _fetchTikTokProfile(h) {
 
   let b64 = avatarUrl ? await imgUrlToBase64(avatarUrl) : null;
   if (!b64) {
-    b64 = await imgUrlToBase64('https://unavatar.io/tiktok/' + encodeURIComponent(h) + '?fallback=false');
+    b64 = await imgUrlToBase64('https://unavatar.io/tiktok/' + encodeURIComponent(h), { direct: true });
   }
 
   const prev = ttCache[h];
@@ -1408,6 +1415,7 @@ async function _fetchTikTokProfile(h) {
     b64: b64 || (prev && prev.b64) || null,
     ts: Date.now()
   };
+  profile.fails = profile.b64 ? 0 : (prev && prev.fails || 0) + 1;
   profile.changed = !!prev && ((prev.display || '') !== profile.display || (prev.b64 || '') !== (profile.b64 || ''));
   ttCache[h] = profile;
   saveCacheLocal();
@@ -1422,6 +1430,7 @@ function startTikTokWatcher() {
   setInterval(async () => {
     if (document.hidden || !ttWatched.size) return;
     for (const handle of ttWatched) {
+      if (!ttIsStale(ttCache[handle])) continue;
       const p = await fetchTikTokProfile(handle);
       if (p && p.changed) { render(); break; }
     }
@@ -1434,6 +1443,7 @@ async function refreshAllProfiles() {
   showToast('جارٍ فحص حسابات تيك توك…');
   let changes = 0;
   for (const handle of ttWatched) {
+    if (ttCache[handle]) ttCache[handle].fails = 0;   // الطلب اليدوي يتجاوز التراجع
     const p = await fetchTikTokProfile(handle, true);
     if (p && p.changed) changes++;
   }
