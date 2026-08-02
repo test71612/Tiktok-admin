@@ -1,0 +1,10 @@
+{
+  "name": "xdreemb52-attendance",
+  "version": "2.0.0",
+  "private": true,
+  "description": "XDreemB52 | لوحة الحضور",
+  "main": "server.js",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "express": "^4.21.2" }
+}
